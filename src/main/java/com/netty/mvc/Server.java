@@ -8,8 +8,10 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequestDecoder;
 import io.netty.handler.codec.http.HttpResponseEncoder;
+import io.netty.handler.stream.ChunkedWriteHandler;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 /**
@@ -37,15 +39,17 @@ public class Server {
             ServerBootstrap b = new ServerBootstrap();
             //指定所使用的NIO传输Channle
             b.group(bossGroup,workerGroup).channel(NioServerSocketChannel.class)
-                    .localAddress(8080)
+                    .localAddress(8082)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel socketChannel) {
                             //如果ServerHandler被注为@Shareable的时候，则可以总是使用同样的实例
                             socketChannel.pipeline()
-                                    .addLast(new HttpRequestDecoder())
-                                    .addLast(new HttpResponseEncoder())
-                                    .addLast(new WebServerHandler(dispatcherHandler));
+                            .addLast("decoder", new HttpRequestDecoder())
+                            .addLast("aggregator", new HttpObjectAggregator(65536))
+                            .addLast("encoder", new HttpResponseEncoder())
+                            .addLast("chunkedWriter", new ChunkedWriteHandler())
+                            .addLast(new WebServerHandler(dispatcherHandler));
                         }
                     });
             //异步的绑定服务器，调用sync===方法阻塞，直到绑定完成

@@ -1,12 +1,22 @@
 package com.netty.mvc.server.handler;
 
 import com.netty.mvc.DispatcherHandler;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
+import io.netty.handler.stream.ChunkedStream;
 import io.netty.util.AsciiString;
-import org.springframework.beans.factory.annotation.Autowired;
+import io.netty.util.CharsetUtil;
 import org.springframework.context.annotation.Configuration;
+
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+
+import static io.netty.handler.codec.http.HttpHeaders.Names.CONTENT_TYPE;
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
+import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
 /**
  * @Author: zxj
@@ -15,7 +25,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @ChannelHandler.Sharable
-public class WebServerHandler extends ChannelInboundHandlerAdapter{
+public class WebServerHandler extends SimpleChannelInboundHandler<FullHttpRequest>{
 
     private AsciiString contentType = HttpHeaderValues.TEXT_PLAIN;
 
@@ -27,16 +37,16 @@ public class WebServerHandler extends ChannelInboundHandlerAdapter{
         this.dispatcherHandler = dispatcherHandler;
     }
     /**
-     * 每个信息入站都会调用
      * @throws Exception
      */
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-
-        Object result = "";
-        if(msg instanceof HttpRequest){
-            result  = dispatcherHandler.handle((HttpRequest)msg);
+    public void channelRead0(ChannelHandlerContext ctx, FullHttpRequest fullHttpRequest) throws Exception {
+        if (!fullHttpRequest.getDecoderResult().isSuccess()) {
+            sendError(ctx, BAD_REQUEST);
+            return;
         }
+        Object result  = dispatcherHandler.handle(fullHttpRequest);
+
         DefaultFullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
                 HttpResponseStatus.OK,
                 Unpooled.wrappedBuffer(result.toString().getBytes())); // 2
@@ -46,25 +56,32 @@ public class WebServerHandler extends ChannelInboundHandlerAdapter{
         heads.add(HttpHeaderNames.CONTENT_LENGTH, response.content().readableBytes()); // 3
         heads.add(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
         //将接受到的消息写给发送者
-        ctx.write(response);
-    }
-
-
-    /**
-     * 通知处理器最后的channelread是当前批处理中的最后一条信息调用
-     * @param ctx
-     * @throws Exception
-     */
-    @Override
-    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-        //将未决消息冲刷到远程节点，并关闭该Channel
-        ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
-                .addListener(ChannelFutureListener.CLOSE);
+        ctx.writeAndFlush(response);
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        cause.printStackTrace();  //打印异常栈追踪
-        ctx.close(); //关闭该channel
+        cause.printStackTrace();
+        if (ctx.channel().isActive()) {
+            sendError(ctx, INTERNAL_SERVER_ERROR);
+        }
     }
+
+    private static void sendError(ChannelHandlerContext ctx, HttpResponseStatus status) {
+        ByteBuf content = Unpooled.copiedBuffer(
+                "Failure: " + status.toString() + "\r\n",
+                CharsetUtil.UTF_8);
+
+        FullHttpResponse fullHttpResponse = new DefaultFullHttpResponse(
+                HTTP_1_1,
+                status,
+                content
+        );
+        fullHttpResponse.headers().add(CONTENT_TYPE, "text/plain; charset=UTF-8");
+
+        // Close the connection as soon as the error message is sent.
+        ctx.write(fullHttpResponse).addListener(ChannelFutureListener.CLOSE);
+    }
+
+
 }
